@@ -1,0 +1,67 @@
+suite: networkpolicy
+templates:
+  - networkpolicy.yaml
+set:
+  image.repository: ghcr.io/mhajder/librenms-mcp
+  image.tag: "1.0.0"
+  networkPolicy.enabled: true
+tests:
+  - it: is not rendered by default
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: allows the release namespace and the helm test pod by default
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress]
+      - equal:
+          path: spec.ingress[0].from
+          value:
+            - podSelector: {}
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: RELEASE-NAME
+                  app.kubernetes.io/component: test
+
+  - it: replaces the namespace default with ingressFrom
+    set:
+      networkPolicy.ingressFrom:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+    asserts:
+      - notContains:
+          path: spec.ingress[0].from
+          content:
+            podSelector: {}
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ingress-nginx
+
+  - it: restricts egress to DNS plus the given rules
+    set:
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.rules:
+        - to:
+            - ipBlock: {cidr: 10.0.0.1/32}
+          ports:
+            - port: 443
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress, Egress]
+      - equal:
+          path: spec.egress[0].ports
+          value:
+            - {port: 53, protocol: UDP}
+            - {port: 53, protocol: TCP}
+      - equal:
+          path: spec.egress[1].to[0].ipBlock.cidr
+          value: 10.0.0.1/32

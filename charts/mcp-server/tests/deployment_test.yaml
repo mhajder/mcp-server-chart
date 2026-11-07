@@ -1,0 +1,206 @@
+suite: deployment
+templates:
+  - deployment.yaml
+  - configmap.yaml
+  - secret.yaml
+set:
+  image.repository: ghcr.io/mhajder/librenms-mcp
+  image.tag: "1.0.0"
+tests:
+  # --- Image
+  - it: fails without image.repository
+    set:
+      image.repository: ""
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "image.repository is required"
+
+  - it: fails without a tag or digest
+    set:
+      image.tag: ""
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "image.tag or image.digest is required"
+
+  - it: uses repository:tag
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mhajder/librenms-mcp:1.0.0
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "1.0.0"
+
+  - it: prefers the digest over the tag and keeps the tag as the label
+    set:
+      image.digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mhajder/librenms-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "1.0.0"
+
+  - it: labels the short digest when only a digest is set
+    set:
+      image.tag: ""
+      image.digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mhajder/librenms-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: 0123456789ab
+
+  - it: makes the version label valid for tags like _v1.2+build.
+    set:
+      image.tag: _v1.2+build.
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: v1.2_build
+
+  # --- Environment
+  - it: sets the chart MCP_* variables
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MCP_TRANSPORT, value: http}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MCP_HTTP_HOST, value: 0.0.0.0}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MCP_HTTP_PORT, value: "8000"}
+
+  - it: lets extraEnv replace a chart variable
+    set:
+      extraEnv:
+        - name: MCP_TRANSPORT
+          value: sse
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MCP_TRANSPORT, value: sse}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MCP_TRANSPORT, value: http}
+
+  - it: loads env sources in precedence order
+    set:
+      env.LIBRENMS_URL: https://librenms.example.com
+      existingSecret: creds
+      secretEnv.LIBRENMS_TOKEN: t
+      envFrom:
+        - secretRef:
+            name: proxy
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - configMapRef: {name: RELEASE-NAME}
+            - secretRef: {name: creds}
+            - secretRef: {name: RELEASE-NAME}
+            - secretRef: {name: proxy}
+
+  - it: keeps the exact digits of numeric env values
+    set:
+      env.BIG: 20240101
+      env.FLAG: true
+    template: configmap.yaml
+    asserts:
+      - equal:
+          path: data.BIG
+          value: "20240101"
+      - equal:
+          path: data.FLAG
+          value: "true"
+
+  - it: adds config and secret checksums so pods restart on changes
+    set:
+      env.A: "1"
+      secretEnv.B: "2"
+    template: deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
+      - exists:
+          path: spec.template.metadata.annotations["checksum/secret"]
+
+  # --- Strategy and volumes
+  - it: switches to Recreate with a ReadWriteOnce volume
+    set:
+      persistence.enabled: true
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy
+          value: {type: Recreate}
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim: {claimName: RELEASE-NAME}
+
+  - it: switches to Recreate with a ReadWriteOncePod volume
+    set:
+      persistence.enabled: true
+      persistence.accessModes: [ReadWriteOncePod]
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy
+          value: {type: Recreate}
+
+  - it: keeps the default strategy with ReadWriteMany
+    set:
+      persistence.enabled: true
+      persistence.accessModes: [ReadWriteMany]
+    template: deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.strategy
+
+  - it: prefers the user's strategy
+    set:
+      persistence.enabled: true
+      strategy:
+        type: RollingUpdate
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: mounts an existing claim
+    set:
+      persistence.enabled: true
+      persistence.existingClaim: shared
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim: {claimName: shared}
+
+  - it: mounts /tmp by default for the read-only root filesystem
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: tmp, mountPath: /tmp}

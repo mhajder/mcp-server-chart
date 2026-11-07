@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "mcp-server.fullname" . }}-test-health
+  namespace: {{ .Release.Namespace }}
+  # No app.kubernetes.io/name label: the Service selector must not match this pod.
+  labels:
+    helm.sh/chart: {{ include "mcp-server.chart" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: wget
+      image: {{ include "mcp-server.testImage" . | quote }}
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      command:
+        - wget
+        - -q
+        - -O-
+        - "http://{{ include "mcp-server.fullname" . }}:{{ .Values.service.port }}{{ dig "httpGet" "path" "/health" (.Values.readinessProbe | default dict) }}"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        limits:
+          memory: 16Mi

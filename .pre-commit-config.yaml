@@ -1,0 +1,77 @@
+fail_fast: false
+minimum_prek_version: "0.5.0"
+default_install_hook_types: [ pre-push, commit-msg, pre-commit ]
+# Hooks without their own stages run on commit only, not again on push.
+default_stages: [ pre-commit ]
+
+repos:
+  - repo: meta
+    hooks:
+      - id: identity
+        name: Print checked files
+        description: Print input to the static check hooks for troubleshooting
+        stages: [manual]
+
+  - repo: builtin
+    hooks:
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+      - id: check-yaml
+        args: [ --allow-multiple-documents ]
+        # Helm templates are Go templates, not plain YAML (helm lint checks them).
+        exclude: ^charts/[^/]+/templates/
+      - id: check-toml
+      - id: check-json
+      - id: end-of-file-fixer
+      - id: detect-private-key
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-illegal-windows-names
+      - id: forbid-new-submodules
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [ --maxkb=100 ]
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.52.0
+    hooks:
+      - id: typos
+        args: [ --hidden, --no-ignore, --force-exclude ]
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.19.3
+    hooks:
+      - id: commitizen
+      - id: commitizen-branch
+        stages:
+          - pre-push
+
+  - repo: https://github.com/norwoodj/helm-docs
+    rev: v1.14.2
+    hooks:
+      # Renders charts/mcp-server/README.md from README.md.gotmpl and the
+      # values.yaml comments (also shown by `helm show readme`).
+      - id: helm-docs-built
+        args:
+          - --chart-search-root=charts
+          - --sort-values-order=file
+        files: ^charts/mcp-server/(README\.md(\.gotmpl)?|Chart\.yaml|values\.yaml)$
+
+  - repo: local
+    hooks:
+      - id: helm-lint
+        name: helm lint
+        entry: bash -c 'for v in charts/mcp-server/ci/*.yaml examples/*.yaml; do helm lint --strict --quiet charts/mcp-server -f "$v" || exit 1; done'
+        language: system
+        pass_filenames: false
+        files: ^(charts/|examples/)
+      - id: helm-unittest
+        name: helm unittest
+        # Needs the plugin (see README > Development); CI runs the same tests.
+        entry: helm unittest charts/mcp-server
+        language: system
+        pass_filenames: false
+        files: ^charts/mcp-server/

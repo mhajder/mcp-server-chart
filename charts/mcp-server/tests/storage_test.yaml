@@ -1,0 +1,41 @@
+suite: pvc and secret
+templates:
+  - pvc.yaml
+  - secret.yaml
+set:
+  image.repository: ghcr.io/mhajder/librenms-mcp
+  image.tag: "1.0.0"
+tests:
+  - it: keeps the PVC on uninstall
+    set:
+      persistence.enabled: true
+    template: pvc.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: does not create a PVC for an existing claim
+    set:
+      persistence.enabled: true
+      persistence.existingClaim: shared
+    template: pvc.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders storageClass "-" as an empty class
+    set:
+      persistence.enabled: true
+      persistence.storageClass: "-"
+    template: pvc.yaml
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: ""
+
+  - it: does not create a Secret without secretEnv or a token value
+    template: secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

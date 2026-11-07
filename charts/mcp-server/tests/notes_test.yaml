@@ -1,0 +1,341 @@
+suite: NOTES.txt warnings
+templates:
+  - NOTES.txt
+set:
+  image.repository: ghcr.io/mhajder/librenms-mcp
+  image.tag: "1.0.0"
+tests:
+  # --- Bearer token
+  - it: warns when no token is configured
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: no MCP bearer token is configured"
+
+  - it: points at existingSecret when the token may come from there
+    set:
+      existingSecret: creds
+    asserts:
+      - matchRegexRaw:
+          pattern: "Make sure MCP_HTTP_BEARER_TOKEN is set in Secret creds"
+      - matchRegexRaw:
+          pattern: "rollout restart deployment/RELEASE-NAME"
+
+  - it: is quiet when the chart sets the token
+    set:
+      mcp.bearerToken.value: s3cret
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "bearer token|MCP_HTTP_BEARER_TOKEN is set"
+
+  - it: skips the token warning with OIDC
+    set:
+      env.OIDC_CONFIG_URL: https://idp.example.com/.well-known/openid-configuration
+      persistence.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "no MCP bearer token"
+
+  - it: skips the token warning with NetBox token passthrough (any truthy spelling)
+    set:
+      env.NETBOX_TOKEN_PASSTHROUGH: "True"
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "no MCP bearer token"
+
+  - it: skips the token warning with GLPI token passthrough
+    set:
+      env.GLPI_TOKEN_PASSTHROUGH: "1"
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "no MCP bearer token"
+
+  - it: points at envFrom when the token may come from there
+    set:
+      envFrom:
+        - secretRef:
+            name: shared
+    asserts:
+      - matchRegexRaw:
+          pattern: "Make sure MCP_HTTP_BEARER_TOKEN is set in your envFrom sources"
+
+  - it: names both existingSecret and envFrom when both may hold the token
+    set:
+      existingSecret: creds
+      envFrom:
+        - secretRef:
+            name: shared
+    asserts:
+      - matchRegexRaw:
+          pattern: "Make sure MCP_HTTP_BEARER_TOKEN is set in Secret creds or your envFrom sources"
+
+  - it: keeps the token warning when passthrough is false
+    set:
+      env.GLPI_TOKEN_PASSTHROUGH: "false"
+    asserts:
+      - matchRegexRaw:
+          pattern: "no MCP bearer token"
+
+  # --- OAuth state
+  - it: warns when OIDC has no volume on /data
+    set:
+      env.OIDC_CONFIG_URL: x
+    asserts:
+      - matchRegexRaw:
+          pattern: "OAuth login is enabled \\(OIDC_CONFIG_URL\\), but nothing is mounted\\s+on /data"
+
+  - it: warns when GLPI login has no volume on /data
+    set:
+      env.GLPI_OAUTH_LOGIN: "yes"
+    asserts:
+      - matchRegexRaw:
+          pattern: "OAuth login is enabled \\(GLPI_OAUTH_LOGIN\\), but nothing is mounted\\s+on /data"
+      - notMatchRegexRaw:
+          pattern: "no MCP bearer token"
+
+  - it: accepts persistence on /data for GLPI login
+    set:
+      env.GLPI_OAUTH_LOGIN: true
+      persistence.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "nothing is mounted"
+
+  - it: accepts an extraVolumeMount on /data
+    set:
+      env.OIDC_CONFIG_URL: x
+      extraVolumeMounts:
+        - name: data
+          mountPath: /data
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "nothing is mounted"
+
+  - it: warns when persistence is mounted elsewhere
+    set:
+      env.OIDC_CONFIG_URL: x
+      persistence.enabled: true
+      persistence.mountPath: /var/x
+    asserts:
+      - matchRegexRaw:
+          pattern: "nothing is mounted"
+
+  - it: follows FASTMCP_HOME
+    set:
+      env.OIDC_CONFIG_URL: x
+      env.FASTMCP_HOME: /state
+      persistence.enabled: true
+      persistence.mountPath: /state
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "nothing is mounted"
+
+  - it: warns about OAuth with more than one replica
+    set:
+      env.OIDC_CONFIG_URL: x
+      persistence.enabled: true
+      replicaCount: 2
+      service.sessionAffinity: ClientIP
+    asserts:
+      - matchRegexRaw:
+          pattern: "OAuth login is enabled with replicaCount > 1"
+
+  # --- Sticky sessions
+  - it: warns about replicas without sessionAffinity
+    set:
+      replicaCount: 2
+    asserts:
+      - matchRegexRaw:
+          pattern: "replicaCount > 1 without service.sessionAffinity=ClientIP"
+
+  - it: is quiet with sessionAffinity ClientIP and no Ingress
+    set:
+      replicaCount: 2
+      service.sessionAffinity: ClientIP
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: replicaCount"
+
+  - it: warns for an Ingress without stickySessions
+    set:
+      replicaCount: 2
+      ingress.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: replicaCount > 1\\. MCP sessions live in pod memory, and Ingress"
+
+  - it: trusts ingress.stickySessions
+    set:
+      replicaCount: 2
+      ingress.enabled: true
+      ingress.stickySessions: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: replicaCount"
+
+  - it: ignores affinity annotations without stickySessions
+    set:
+      replicaCount: 2
+      ingress.enabled: true
+      ingress.annotations:
+        nginx.ingress.kubernetes.io/affinity: cookie
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: replicaCount > 1\\."
+
+  - it: warns for an HTTPRoute with the default rule
+    set:
+      replicaCount: 2
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: gw
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: replicaCount > 1\\."
+
+  - it: warns when only some HTTPRoute rules are sticky
+    set:
+      replicaCount: 2
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: gw
+      httpRoute.rules:
+        - sessionPersistence:
+            type: Cookie
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /mcp
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: replicaCount > 1\\."
+
+  - it: is quiet when every HTTPRoute rule is sticky
+    set:
+      replicaCount: 2
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: gw
+      httpRoute.rules:
+        - sessionPersistence:
+            type: Cookie
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: replicaCount"
+
+  # --- Endpoints
+  - it: prints https for a TLS host
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: mcp.example.com
+      ingress.tls:
+        - secretName: tls
+          hosts:
+            - mcp.example.com
+    asserts:
+      - matchRegexRaw:
+          pattern: "https://mcp\\.example\\.com/mcp"
+
+  - it: prints https for a wildcard TLS host
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: a.example.com
+      ingress.tls:
+        - secretName: tls
+          hosts:
+            - "*.example.com"
+    asserts:
+      - matchRegexRaw:
+          pattern: "https://a\\.example\\.com/mcp"
+
+  - it: prints https for a TLS entry without hosts
+    set:
+      ingress.enabled: true
+      ingress.tls:
+        - secretName: tls
+    asserts:
+      - matchRegexRaw:
+          pattern: "https://mcp\\.example\\.com/mcp"
+
+  - it: prints http without TLS
+    set:
+      ingress.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "  http://mcp\\.example\\.com/mcp"
+
+  # --- NetworkPolicy
+  - it: warns when the policy would block the Ingress controller
+    set:
+      networkPolicy.enabled: true
+      ingress.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "Add the controller's namespace\\s+to networkPolicy.ingressFrom"
+
+  - it: is quiet when ingressFrom is set
+    set:
+      networkPolicy.enabled: true
+      ingress.enabled: true
+      networkPolicy.ingressFrom:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING: networkPolicy"
+
+  - it: warns about restricted egress without rules
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "networkPolicy.egress is enabled without rules"
+
+  # --- PodDisruptionBudget
+  - it: warns when minAvailable equals replicaCount
+    set:
+      podDisruptionBudget.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "PodDisruptionBudget allows no evictions with replicaCount 1"
+
+  - it: rounds percentages up like the eviction API (51% of 2 = 2)
+    set:
+      replicaCount: 2
+      service.sessionAffinity: ClientIP
+      podDisruptionBudget.enabled: true
+      podDisruptionBudget.minAvailable: 51%
+    asserts:
+      - matchRegexRaw:
+          pattern: "allows no evictions with replicaCount 2"
+
+  - it: is quiet when 50% of 2 leaves one eviction
+    set:
+      replicaCount: 2
+      service.sessionAffinity: ClientIP
+      podDisruptionBudget.enabled: true
+      podDisruptionBudget.minAvailable: 50%
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "PodDisruptionBudget"
+
+  - it: warns when maxUnavailable is 0%
+    set:
+      replicaCount: 3
+      service.sessionAffinity: ClientIP
+      podDisruptionBudget.enabled: true
+      podDisruptionBudget.maxUnavailable: 0%
+    asserts:
+      - matchRegexRaw:
+          pattern: "allows no evictions with replicaCount 3"
+
+  - it: is quiet with replicaCount 0
+    set:
+      replicaCount: 0
+      podDisruptionBudget.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "PodDisruptionBudget"

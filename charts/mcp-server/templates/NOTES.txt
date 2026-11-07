@@ -1,0 +1,132 @@
+{{- $fullname := include "mcp-server.fullname" . }}
+{{- $tokenSource := include "mcp-server.bearerTokenSource" . }}
+{{- $healthPath := dig "httpGet" "path" "/health" (.Values.readinessProbe | default dict) }}
+{{- /* Login modes of the mhajder/*-mcp servers. Only env is visible here, not Secrets. */}}
+{{- $env := .Values.env | default dict }}
+{{- $truthy := list "true" "1" "yes" "on" }}
+{{- $oidc := not (empty $env.OIDC_CONFIG_URL) }}
+{{- $glpiLogin := has (toString $env.GLPI_OAUTH_LOGIN | lower) $truthy }}
+{{- $passthrough := or (has (toString $env.NETBOX_TOKEN_PASSTHROUGH | lower) $truthy) (has (toString $env.GLPI_TOKEN_PASSTHROUGH | lower) $truthy) }}
+{{- $altAuth := or $oidc $glpiLogin $passthrough }}
+{{ $fullname }} is running {{ include "mcp-server.image" . }}.
+
+MCP endpoint inside the cluster:
+  http://{{ $fullname }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}{{ .Values.mcp.path }}
+{{- if .Values.ingress.enabled }}
+
+MCP endpoint via Ingress:
+{{- range $host := .Values.ingress.hosts }}
+{{- $scheme := "http" }}
+{{- $wildcard := regexReplaceAll "^[^.]+" $host.host "*" }}
+{{- range $.Values.ingress.tls }}
+{{- if or (not .hosts) (has $host.host .hosts) (has $wildcard .hosts) }}{{ $scheme = "https" }}{{ end }}
+{{- end }}
+{{- /* Ingress does not rewrite paths, so the server sees mcp.path as-is. */}}
+  {{ $scheme }}://{{ $host.host }}{{ $.Values.mcp.path }}
+{{- end }}
+{{- end }}
+{{- if and .Values.httpRoute.enabled .Values.httpRoute.hostnames }}
+
+MCP endpoint via HTTPRoute (http or https, depending on the Gateway listener):
+{{- range .Values.httpRoute.hostnames }}
+  {{ . }}{{ $.Values.mcp.path }}
+{{- end }}
+{{- end }}
+
+Test it from your machine:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }} {{ .Values.service.port }}
+  curl http://127.0.0.1:{{ .Values.service.port }}{{ $healthPath }}
+{{- if not (or $tokenSource $altAuth) }}
+{{- $places := list }}
+{{- with .Values.existingSecret }}{{ $places = append $places (printf "Secret %s" .) }}{{ end }}
+{{- if .Values.envFrom }}{{ $places = append $places "your envFrom sources" }}{{ end }}
+{{- if $places }}
+
+Make sure MCP_HTTP_BEARER_TOKEN is set in {{ join " or " $places }}.
+Without it, anyone who can reach the service can call the tools.
+{{- else }}
+
+WARNING: no MCP bearer token is configured. Anyone who can reach the service
+can call the tools, unless the server has its own auth (OIDC/OAuth).
+Set mcp.bearerToken.existingSecret, or add MCP_HTTP_BEARER_TOKEN to existingSecret.
+{{- end }}
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- /* Skip the warning when stickiness is already configured where traffic enters. */}}
+{{- $ingressSticky := .Values.ingress.stickySessions }}
+{{- /* Every rule must be sticky; the default rule (no rules set) is not. */}}
+{{- $routeSticky := not (empty .Values.httpRoute.rules) }}
+{{- range .Values.httpRoute.rules }}
+{{- if not .sessionPersistence }}{{ $routeSticky = false }}{{ end }}
+{{- end }}
+{{- $needsIngress := and .Values.ingress.enabled (not $ingressSticky) }}
+{{- $needsRoute := and .Values.httpRoute.enabled (not $routeSticky) }}
+{{- if or $needsIngress $needsRoute }}
+
+WARNING: replicaCount > 1. MCP sessions live in pod memory, and Ingress / Gateway
+controllers send traffic straight to the pods, so service.sessionAffinity does
+not apply to them. Configure sticky sessions on the Ingress (e.g. ingress-nginx
+cookie affinity annotations) and set ingress.stickySessions=true, or on the
+HTTPRoute (httpRoute.rules[].sessionPersistence).
+{{- else if not (or .Values.ingress.enabled .Values.httpRoute.enabled (eq .Values.service.sessionAffinity "ClientIP")) }}
+
+WARNING: replicaCount > 1 without service.sessionAffinity=ClientIP. MCP sessions
+live in pod memory, so requests can land on a pod that does not know the session.
+{{- end }}
+{{- end }}
+{{- if or $oidc $glpiLogin }}
+{{- /* FastMCP keeps OAuth client registrations and tokens in FASTMCP_HOME (/data in the images). */}}
+{{- $home := $env.FASTMCP_HOME | default "/data" }}
+{{- $stored := and .Values.persistence.enabled (eq .Values.persistence.mountPath $home) }}
+{{- range .Values.extraVolumeMounts }}{{ if eq .mountPath $home }}{{ $stored = true }}{{ end }}{{ end }}
+{{- if not $stored }}
+
+WARNING: OAuth login is enabled ({{ if $oidc }}OIDC_CONFIG_URL{{ else }}GLPI_OAUTH_LOGIN{{ end }}), but nothing is mounted
+on {{ $home }}. FastMCP stores client registrations and tokens there, and the root
+filesystem is read-only. Set persistence.enabled=true (mountPath {{ $home }}).
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+
+WARNING: OAuth login is enabled with replicaCount > 1. Each pod keeps its own
+client registrations, so run 1 replica.
+{{- end }}
+{{- end }}
+{{- $netpol := .Values.networkPolicy }}
+{{- if and $netpol.enabled (not $netpol.ingressFrom) (or .Values.ingress.enabled .Values.httpRoute.enabled) }}
+
+WARNING: networkPolicy only allows pods in namespace {{ .Release.Namespace }}, so the
+Ingress / Gateway controller cannot reach the pods. Add the controller's namespace
+to networkPolicy.ingressFrom.
+{{- end }}
+{{- if and $netpol.enabled $netpol.egress.enabled (not $netpol.egress.rules) }}
+
+WARNING: networkPolicy.egress is enabled without rules, so the server can only
+resolve DNS and cannot reach its backend. Add destinations to networkPolicy.egress.rules.
+{{- end }}
+{{- $pdb := .Values.podDisruptionBudget }}
+{{- $replicas := int .Values.replicaCount }}
+{{- if and $pdb.enabled (gt $replicas 0) }}
+{{- $blocks := false }}
+{{- if hasKey $pdb "maxUnavailable" }}
+{{- $blocks = eq (int (trimSuffix "%" (include "mcp-server.scalar" $pdb.maxUnavailable))) 0 }}
+{{- else }}
+{{- $min := include "mcp-server.scalar" $pdb.minAvailable }}
+{{- $required := int $min }}
+{{- if hasSuffix "%" $min }}
+{{- /* The eviction API rounds percentages up. */}}
+{{- $required = div (add (mul (int (trimSuffix "%" $min)) $replicas) 99) 100 }}
+{{- end }}
+{{- $blocks = ge (int $required) $replicas }}
+{{- end }}
+{{- if $blocks }}
+
+WARNING: the PodDisruptionBudget allows no evictions with replicaCount {{ $replicas }}.
+`kubectl drain` and node upgrades will block. Lower podDisruptionBudget.minAvailable
+or raise maxUnavailable.
+{{- end }}
+{{- end }}
+{{- if .Values.existingSecret }}
+
+After changing Secret {{ .Values.existingSecret }}, restart the pods to load it:
+  kubectl -n {{ .Release.Namespace }} rollout restart deployment/{{ $fullname }}
+{{- end }}

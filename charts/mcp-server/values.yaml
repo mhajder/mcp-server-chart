@@ -1,0 +1,398 @@
+image:
+  # -- (required) Image repository, e.g. ghcr.io/mhajder/librenms-mcp
+  # @section -- Image
+  repository: ""
+  # -- (required unless digest is set) Image tag, e.g. "1.4.0". Must be a
+  # quoted string: unquoted 1.0 would become tag 1.
+  # @section -- Image
+  tag: ""
+  # -- Optional digest (sha256:...). Takes precedence over tag.
+  # @section -- Image
+  digest: ""
+  # -- Use Always with a moving tag such as latest.
+  # @section -- Image
+  pullPolicy: IfNotPresent
+
+# -- Pull secrets for private registries.
+# @section -- Image
+imagePullSecrets: []
+
+mcp:
+  # -- MCP_TRANSPORT. Must be an HTTP transport (http or sse) to run in Kubernetes.
+  # @section -- MCP server
+  transport: http
+  # -- MCP_HTTP_PORT and the container port. MCP_HTTP_HOST is always 0.0.0.0.
+  # @section -- MCP server
+  port: 8000
+  # -- Path the MCP endpoint is served on. Used in NOTES only.
+  # @section -- MCP server
+  path: /mcp
+  # Bearer token clients must send (MCP_HTTP_BEARER_TOKEN). Set it in one place:
+  # here, secretEnv, extraEnv or existingSecret.
+  bearerToken:
+    # -- Plain value. Stored in the chart-managed Secret. Prefer existingSecret.
+    # @section -- MCP server
+    value: ""
+    # -- Name of an existing Secret holding the token.
+    # @section -- MCP server
+    existingSecret: ""
+    # -- Key inside existingSecret.
+    # @section -- MCP server
+    existingSecretKey: MCP_HTTP_BEARER_TOKEN
+
+#  - name: POD_NAME
+#    valueFrom:
+#      fieldRef:
+#        fieldPath: metadata.name
+
+# -- Override the image ENTRYPOINT.
+# @section -- MCP server
+command: []
+
+# -- Override the image CMD.
+# @section -- MCP server
+args: []
+
+# -- Plain environment variables (rendered into a ConfigMap).
+# Values are quoted, so booleans and numbers are passed as strings. Quote
+# numbers whose exact text matters: unquoted 2.0 renders as "2", 1e21 as "1e+21".
+# @section -- Environment and secrets
+env: {}
+
+#  LIBRENMS_URL: https://librenms.example.com
+#  READ_ONLY_MODE: "true"
+
+# -- Sensitive environment variables (rendered into a chart-managed Secret).
+# Prefer existingSecret so credentials stay out of values files.
+# @section -- Environment and secrets
+secretEnv: {}
+
+#  LIBRENMS_TOKEN: changeme
+
+# -- Name of an existing Secret loaded with envFrom (all keys become env vars).
+# Put credentials and MCP_HTTP_BEARER_TOKEN here.
+# @section -- Environment and secrets
+existingSecret: ""
+
+# -- Additional envFrom sources.
+# @section -- Environment and secrets
+envFrom: []
+
+#  - secretRef:
+#      name: shared-proxy-settings
+
+# -- Additional env entries (supports valueFrom). An entry named like a
+# chart-set var (MCP_TRANSPORT, MCP_HTTP_HOST, MCP_HTTP_PORT) replaces it.
+# Change the port with mcp.port, not here: containerPort and probes follow mcp.port.
+# @section -- Environment and secrets
+extraEnv: []
+
+service:
+  # -- Service type.
+  # @section -- Exposure
+  type: ClusterIP
+  # -- Service port.
+  # @section -- Exposure
+  port: 8000
+  # -- Service annotations.
+  # @section -- Exposure
+  annotations: {}
+  # -- Set to ClientIP when replicaCount > 1 so MCP sessions stay on one pod.
+  # Only applies to traffic through the Service: Ingress and Gateway controllers
+  # route to pods directly, so configure stickiness there instead.
+  # @section -- Exposure
+  sessionAffinity: None
+
+ingress:
+  # -- Create an Ingress.
+  # @section -- Exposure
+  enabled: false
+  # -- IngressClass name, e.g. nginx.
+  # @section -- Exposure
+  className: ""
+  # -- Ingress annotations, e.g. ingress-nginx sticky sessions (see Running More Than One Replica).
+  # @section -- Exposure
+  annotations: {}
+  # -- Set to true once you have configured sticky sessions for your controller
+  # in annotations (e.g. ingress-nginx affinity: cookie). It only silences the
+  # replicaCount > 1 warning in NOTES; the chart cannot add stickiness itself.
+  # @section -- Exposure
+  stickySessions: false
+  # -- Hosts and paths. pathType defaults to Prefix.
+  # @section -- Exposure
+  hosts:
+    - host: mcp.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS entries. An entry without hosts covers every host.
+  # @section -- Exposure
+  tls: []
+  #  - secretName: mcp-example-tls
+  #    hosts:
+  #      - mcp.example.com
+
+# Gateway API HTTPRoute (alternative to ingress).
+httpRoute:
+  # -- Create an HTTPRoute.
+  # @section -- Exposure
+  enabled: false
+  # -- HTTPRoute annotations.
+  # @section -- Exposure
+  annotations: {}
+  # -- (required with httpRoute.enabled) Gateways to attach to.
+  # @section -- Exposure
+  parentRefs: []
+  #  - name: shared-gateway
+  #    namespace: gateway-system
+  #    sectionName: https
+  # -- Hostnames the route matches.
+  # @section -- Exposure
+  hostnames: []
+  #  - mcp.example.com
+  # -- Default: one rule sending every path to the service. Rules are passed
+  # through as-is (matches, filters, timeouts, sessionPersistence, ...), except
+  # backendRefs, which always points at this chart's Service.
+  # @section -- Exposure
+  rules: []
+
+# NetworkPolicy for the MCP pods.
+networkPolicy:
+  # -- Create a NetworkPolicy. Needs a CNI that enforces it (Calico, Cilium,
+  # k3s/kube-router, ...); other CNIs accept the object and ignore it.
+  # @section -- Network policy
+  enabled: false
+  # -- Peers allowed to reach the MCP port (NetworkPolicyPeer list).
+  # Empty: only pods in the release namespace. With ingress or httpRoute, add
+  # the controller's namespace here. The `helm test` pod is always allowed.
+  # @section -- Network policy
+  ingressFrom: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: ingress-nginx
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: ai-agents
+  egress:
+    # -- Also restrict outgoing traffic. Off by default: the server must reach
+    # its backend (NetBox, Zabbix, ...) and, with OIDC, the identity provider.
+    # @section -- Network policy
+    enabled: false
+    # -- Peers allowed for DNS (port 53). Default: CoreDNS / kube-dns.
+    # @section -- Network policy
+    dnsTo:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+    # -- Other allowed destinations (NetworkPolicyEgressRule list).
+    # @section -- Network policy
+    rules: []
+    #  - to:
+    #      - ipBlock:
+    #          cidr: 10.20.30.40/32 # NetBox
+    #    ports:
+    #      - port: 443
+    #        protocol: TCP
+
+# -- Number of pods. MCP Streamable HTTP sessions are kept in memory, so
+# more than 1 replica needs sticky sessions: service.sessionAffinity for direct
+# Service traffic, or affinity on the Ingress / httpRoute.rules[].sessionPersistence.
+# @section -- Replicas and availability
+replicaCount: 1
+
+# -- Deployment strategy. Default: RollingUpdate, or Recreate when persistence
+# uses a ReadWriteOnce(Pod) volume (a new pod on another node could not attach it).
+# @section -- Replicas and availability
+strategy: {}
+
+podDisruptionBudget:
+  # -- Create a PodDisruptionBudget. NOTES warns when it would block node drains.
+  # @section -- Replicas and availability
+  enabled: false
+  # -- Ignored when maxUnavailable is set.
+  # @section -- Replicas and availability
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# -- Liveness probe. The servers answer GET /health without the bearer token.
+# @section -- Probes and resources
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Readiness probe. helm test calls the same path through the Service.
+# @section -- Probes and resources
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Startup probe: allows up to 60s for the server to start.
+# @section -- Probes and resources
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 2
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+# -- Container resources.
+# @section -- Probes and resources
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# Persistent volume for servers that keep state on disk (OAuth state of
+# ghostfolio-mcp and glpi-mcp; see Server-Specific Notes).
+persistence:
+  # -- Create and mount a PVC. It is kept on uninstall.
+  # @section -- Storage
+  enabled: false
+  # -- Use an existing PVC instead of creating one.
+  # @section -- Storage
+  existingClaim: ""
+  # -- Mount path. The images set FASTMCP_HOME=/data.
+  # @section -- Storage
+  mountPath: /data
+  # -- StorageClass. Empty: the cluster default.
+  # @section -- Storage
+  storageClass: ""
+  # -- Also picks the default strategy (Recreate for ReadWriteOnce(Pod)); with
+  # existingClaim, set it to the claim's access modes.
+  # @section -- Storage
+  accessModes:
+    - ReadWriteOnce
+  # -- Requested size.
+  # @section -- Storage
+  size: 1Gi
+  # -- PVC annotations.
+  # @section -- Storage
+  annotations: {}
+
+tmpVolume:
+  # -- Mount an emptyDir at /tmp, needed with readOnlyRootFilesystem.
+  # @section -- Storage
+  enabled: true
+  # -- Size limit of the /tmp emptyDir.
+  # @section -- Storage
+  sizeLimit: 64Mi
+
+# -- Extra pod volumes (e.g. a CA bundle ConfigMap).
+# @section -- Storage
+extraVolumes: []
+
+# -- Extra container volume mounts.
+# @section -- Storage
+extraVolumeMounts: []
+
+serviceAccount:
+  # -- Create a ServiceAccount for the pods.
+  # @section -- Security
+  create: true
+  # -- Default: the fullname.
+  # @section -- Security
+  name: ""
+  # -- ServiceAccount annotations (e.g. for workload identity).
+  # @section -- Security
+  annotations: {}
+  # -- MCP servers do not talk to the Kubernetes API.
+  # @section -- Security
+  automountServiceAccountToken: false
+
+# -- Pod security context. The images run as UID 10001.
+# @default -- non-root UID/GID 10001, fsGroup 10001, RuntimeDefault seccomp
+# @section -- Security
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+  # -- Pod sysctls, e.g. net.ipv4.ping_group_range for unprivileged ping.
+  # @section -- Security
+  sysctls: []
+
+# -- Container security context.
+# @default -- read-only root filesystem, no privilege escalation, all capabilities dropped
+# @section -- Security
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Extra pod annotations.
+# @section -- Pod scheduling and metadata
+podAnnotations: {}
+
+# -- Extra pod labels.
+# @section -- Pod scheduling and metadata
+podLabels: {}
+
+# -- Pod priorityClassName.
+# @section -- Pod scheduling and metadata
+priorityClassName: ""
+
+# -- Node selector.
+# @section -- Pod scheduling and metadata
+nodeSelector: {}
+
+# -- Tolerations.
+# @section -- Pod scheduling and metadata
+tolerations: []
+
+# -- Pod affinity rules.
+# @section -- Pod scheduling and metadata
+affinity: {}
+
+# -- Topology spread constraints.
+# @section -- Pod scheduling and metadata
+topologySpreadConstraints: []
+
+# -- Seconds the pod gets to finish open requests on shutdown.
+# @section -- Pod scheduling and metadata
+terminationGracePeriodSeconds: 30
+
+#  - name: registry-credentials
+
+# -- Overrides the chart name in labels.
+# @section -- Naming
+nameOverride: ""
+
+# -- Overrides resource names. Default: the release name.
+# @section -- Naming
+fullnameOverride: ""
+
+# Pod run by `helm test`: it calls the health endpoint through the Service.
+tests:
+  image:
+    # -- Any image with wget. Point this at a mirror when Docker Hub is not
+    # reachable; imagePullSecrets apply to the test pod too.
+    # @section -- Helm test
+    repository: busybox
+    # -- Test image tag.
+    # @section -- Helm test
+    tag: "1.38"
+    # -- Optional; pins the exact image. Clear it when you change repository or tag.
+    # @section -- Helm test
+    digest: sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
+    # -- Test image pull policy.
+    # @section -- Helm test
+    pullPolicy: IfNotPresent

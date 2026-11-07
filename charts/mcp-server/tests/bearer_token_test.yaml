@@ -1,0 +1,112 @@
+suite: bearer token sources
+templates:
+  - deployment.yaml
+  - secret.yaml
+set:
+  image.repository: ghcr.io/mhajder/librenms-mcp
+  image.tag: "1.0.0"
+tests:
+  - it: renders without any token source
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCP_HTTP_BEARER_TOKEN
+          any: true
+
+  - it: stores mcp.bearerToken.value in the chart Secret
+    set:
+      mcp.bearerToken.value: s3cret
+    template: secret.yaml
+    asserts:
+      - equal:
+          path: stringData.MCP_HTTP_BEARER_TOKEN
+          value: s3cret
+
+  - it: reads mcp.bearerToken.existingSecret through secretKeyRef
+    set:
+      mcp.bearerToken.existingSecret: tokens
+      mcp.bearerToken.existingSecretKey: mcp
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCP_HTTP_BEARER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: tokens
+                key: mcp
+
+  - it: fails when the token is set in env (plain ConfigMap)
+    set:
+      env.MCP_HTTP_BEARER_TOKEN: oops
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "MCP_HTTP_BEARER_TOKEN must not be in env"
+
+  - it: fails when two chart sources set the token
+    set:
+      mcp.bearerToken.value: a
+      secretEnv.MCP_HTTP_BEARER_TOKEN: b
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "Set the MCP bearer token in one place only, got: mcp.bearerToken.value, secretEnv.MCP_HTTP_BEARER_TOKEN"
+
+  - it: counts an extraEnv entry as a source
+    set:
+      mcp.bearerToken.existingSecret: tokens
+      extraEnv:
+        - name: MCP_HTTP_BEARER_TOKEN
+          value: b
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "one place only, got: mcp.bearerToken.existingSecret, extraEnv"
+
+  - it: fails when an empty secretEnv token would override existingSecret
+    set:
+      existingSecret: creds
+      secretEnv.MCP_HTTP_BEARER_TOKEN: ""
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "MCP_HTTP_BEARER_TOKEN is empty in secretEnv.MCP_HTTP_BEARER_TOKEN, which overrides"
+
+  - it: fails when an empty extraEnv token would override envFrom
+    set:
+      envFrom:
+        - secretRef:
+            name: shared
+      extraEnv:
+        - name: MCP_HTTP_BEARER_TOKEN
+          value: ""
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "MCP_HTTP_BEARER_TOKEN is empty in extraEnv"
+
+  - it: allows an empty token when nothing else could provide one
+    set:
+      secretEnv.MCP_HTTP_BEARER_TOKEN: ""
+    template: deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: accepts an extraEnv token from valueFrom
+    set:
+      existingSecret: creds
+      extraEnv:
+        - name: MCP_HTTP_BEARER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: other
+              key: token
+    template: deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1

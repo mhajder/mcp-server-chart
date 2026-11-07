@@ -1,0 +1,84 @@
+name: Bug report
+description: The mcp-server chart renders or deploys something wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove tokens, passwords and anything else private from what you paste below.
+        For security issues, use [private vulnerability reporting](https://github.com/mhajder/mcp-server-chart/security/advisories/new) instead.
+
+        If the MCP server itself misbehaves (wrong tool output, API errors), report it in that server's repository instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include the error from `helm`, `kubectl` or the pod, or the resource that rendered wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. helm upgrade --install librenms-mcp oci://ghcr.io/mhajder/charts/mcp-server -f values.yaml
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Chart version
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: MCP server and image tag
+      placeholder: e.g. ghcr.io/mhajder/librenms-mcp:1.13.0
+    validations:
+      required: true
+  - type: input
+    id: kubernetes
+    attributes:
+      label: Kubernetes version and distribution
+      placeholder: e.g. 1.37 on k3s, EKS, Talos
+    validations:
+      required: true
+  - type: input
+    id: helm
+    attributes:
+      label: Helm version
+      placeholder: e.g. 3.19.0 or 4.0.1
+    validations:
+      required: true
+  - type: dropdown
+    id: exposure
+    attributes:
+      label: How is the server exposed?
+      options:
+        - ClusterIP only
+        - Ingress
+        - Gateway API HTTPRoute
+        - LoadBalancer / NodePort
+    validations:
+      required: true
+  - type: textarea
+    id: values
+    attributes:
+      label: Values
+      description: Your values file without secrets. Never paste tokens.
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Events and logs
+      description: Output of `kubectl describe pod` (Events section) and `kubectl logs`, redacted.
+      render: text

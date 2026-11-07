@@ -1,0 +1,38 @@
+name: Artifact Hub Metadata
+
+# Pushes artifacthub-repo.yml to the chart's OCI repository under the
+# `artifacthub.io` tag, where Artifact Hub reads the repository metadata.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - artifacthub-repo.yml
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  push-metadata:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
+
+      - name: Push artifacthub-repo.yml
+        env:
+          OWNER: ${{ github.repository_owner }}
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | oras login ghcr.io --username "$ACTOR" --password-stdin
+          # OCI references must be lowercase
+          oras push "ghcr.io/${OWNER,,}/charts/mcp-server:artifacthub.io" \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml

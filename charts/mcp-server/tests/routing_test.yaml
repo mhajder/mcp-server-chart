@@ -1,0 +1,83 @@
+suite: service, ingress and httproute
+templates:
+  - service.yaml
+  - ingress.yaml
+  - httproute.yaml
+set:
+  image.repository: ghcr.io/mhajder/librenms-mcp
+  image.tag: "1.0.0"
+tests:
+  - it: renders the Service with session affinity
+    set:
+      service.sessionAffinity: ClientIP
+    template: service.yaml
+    asserts:
+      - equal:
+          path: spec.sessionAffinity
+          value: ClientIP
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+
+  - it: defaults Ingress paths to / Prefix
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: a.example.com
+    template: ingress.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0]
+          value:
+            path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME
+                port: {number: 8000}
+
+  - it: fails an HTTPRoute without parentRefs
+    set:
+      httpRoute.enabled: true
+    template: httproute.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "httpRoute.parentRefs is required"
+
+  - it: uses one catch-all rule by default
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: gw
+    template: httproute.yaml
+    asserts:
+      - equal:
+          path: spec.rules
+          value:
+            - matches:
+                - path: {type: PathPrefix, value: /}
+              backendRefs:
+                - name: RELEASE-NAME
+                  port: 8000
+
+  - it: keeps rule fields but always points backendRefs at the Service
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: gw
+      httpRoute.rules:
+        - timeouts:
+            request: 0s
+          backendRefs:
+            - name: elsewhere
+              port: 1
+    template: httproute.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].timeouts.request
+          value: 0s
+      - equal:
+          path: spec.rules[0].backendRefs
+          value:
+            - name: RELEASE-NAME
+              port: 8000

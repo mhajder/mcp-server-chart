@@ -1,0 +1,36 @@
+# zabbix-mcp
+# Install:
+#   helm upgrade --install zabbix-mcp oci://ghcr.io/mhajder/charts/mcp-server \
+#     -n mcp --create-namespace -f examples/zabbix-mcp.yaml
+#
+# Create the credentials Secret first:
+#   kubectl -n mcp create secret generic zabbix-mcp-credentials \
+#     --from-literal=ZABBIX_TOKEN='...' \
+#     --from-literal=MCP_HTTP_BEARER_TOKEN='...'
+
+image:
+  repository: ghcr.io/mhajder/zabbix-mcp
+  # "latest" is rebuilt on every push to main (unreleased code).
+  # Pin a release (e.g. "1.2.3") for production.
+  tag: latest
+  # Required with a moving tag, otherwise nodes keep the cached image.
+  pullPolicy: Always
+
+env:
+  ZABBIX_URL: "https://zabbix.example.com/api_jsonrpc.php"
+  ZABBIX_VERIFY_SSL: "true"
+  ZABBIX_TIMEOUT: "30"
+  ZABBIX_SKIP_VERSION_CHECK: "false"
+  READ_ONLY_MODE: "true"
+  LOG_LEVEL: "INFO"
+
+existingSecret: zabbix-mcp-credentials
+
+# Expose outside the cluster with Gateway API (or use ingress: instead):
+# httpRoute:
+#   enabled: true
+#   parentRefs:
+#     - name: shared-gateway
+#       namespace: gateway-system
+#   hostnames:
+#     - zabbix-mcp.example.com

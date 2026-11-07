@@ -1,0 +1,94 @@
+# Turns on every optional resource so CI renders and validates all templates.
+replicaCount: 2
+image:
+  repository: ghcr.io/mhajder/librenms-mcp
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+imagePullSecrets:
+  - name: registry
+mcp:
+  bearerToken:
+    value: ci-token
+env:
+  LIBRENMS_URL: https://librenms.example.com
+  READ_ONLY_MODE: true
+  LIBRENMS_TIMEOUT: 30
+secretEnv:
+  LIBRENMS_TOKEN: ci-secret
+existingSecret: extra-credentials
+envFrom:
+  - secretRef:
+      name: proxy-settings
+extraEnv:
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+service:
+  sessionAffinity: ClientIP
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: mcp.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: mcp-tls
+      hosts:
+        - mcp.example.com
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: shared-gateway
+      namespace: gateway-system
+  hostnames:
+    - mcp.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /mcp
+      timeouts:
+        request: 0s
+persistence:
+  enabled: true
+  storageClass: fast
+strategy:
+  type: Recreate
+podDisruptionBudget:
+  enabled: true
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    enabled: true
+    rules:
+      - to:
+          - ipBlock:
+              cidr: 10.0.0.0/8
+        ports:
+          - port: 443
+            protocol: TCP
+podSecurityContext:
+  sysctls:
+    - name: net.ipv4.ping_group_range
+      value: "0 2147483647"
+extraVolumes:
+  - name: ca
+    configMap:
+      name: corporate-ca
+extraVolumeMounts:
+  - name: ca
+    mountPath: /etc/ssl/corporate
+    readOnly: true
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/instance: ci

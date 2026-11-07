@@ -1,0 +1,169 @@
+name: Lint and Validate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CHART: charts/mcp-server
+
+jobs:
+  lint:
+    name: helm lint (Helm ${{ matrix.helm }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        helm: ["v3.8.2", "v3.22.1", "latest"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ matrix.helm }}
+
+      - name: Lint every values file
+        run: |
+          set -euo pipefail
+          status=0
+          for values in "$CHART"/ci/*.yaml examples/*.yaml; do
+            helm lint --strict "$CHART" -f "$values" || { echo "::error file=$values::helm lint failed"; status=1; }
+          done
+          exit $status
+
+      - name: Rendering without image.repository must fail
+        run: |
+          if out=$(helm template ci "$CHART" 2>&1); then
+            echo "::error::chart rendered without image.repository"
+            exit 1
+          fi
+          # Any other render error (e.g. a template regression) must not pass this check
+          if ! grep -q "image.repository is required" <<<"$out"; then
+            echo "::error::render failed for another reason"
+            echo "$out"
+            exit 1
+          fi
+
+  kubeconform:
+    name: kubeconform (k8s ${{ matrix.kubernetes }})
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.23 is the chart's kubeVersion floor; the rest are the supported minors
+        kubernetes: ["1.23.17", "1.35.8", "1.36.4", "1.37.0"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Render every values file
+        env:
+          KUBE_VERSION: ${{ matrix.kubernetes }}
+        run: |
+          set -euo pipefail
+          mkdir -p rendered
+          for values in "$CHART"/ci/*.yaml examples/*.yaml; do
+            # One file per values file, so kubeconform errors name the example
+            helm template ci "$CHART" -f "$values" --kube-version "$KUBE_VERSION" \
+              > "rendered/$(basename "$(dirname "$values")")-$(basename "$values")"
+          done
+
+      - name: Validate against the Kubernetes schemas
+        uses: docker://ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
+        with:
+          args: >-
+            -strict -summary
+            -kubernetes-version ${{ matrix.kubernetes }}
+            -schema-location default
+            -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+            rendered/
+
+  unittest:
+    name: helm unittest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Template logic tests in charts/mcp-server/tests/ (bearer token sources,
+      # NOTES warnings, strategy, NetworkPolicy, ...).
+      # Run as the runner's UID: the image's own user (1000) cannot write the
+      # checkout (snapshots) or Helm's cache. Keep the pinned ref in sync with README.
+      - name: helm unittest
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp
+          -v "$PWD:/apps" -w /apps
+          helmunittest/helm-unittest:4.3.0-1.2.1@sha256:28ea86c3e0b07f501f0c2e9c08b9f41e240f4a4b571cb5106b36cf0f0607e989
+          "$CHART"
+
+  artifacthub:
+    name: Artifact Hub lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Checks the Chart.yaml metadata Artifact Hub reads (annotations, icon, README).
+      - name: ah lint
+        uses: docker://artifacthub/ah:v1.23.0@sha256:e5d2a2cdef85aac4928e8176ffaad24746c5fe961d64ff6856f7222957095356
+        with:
+          args: ah lint --kind helm --path charts
+
+  kind:
+    name: install on kind (k8s ${{ matrix.kubernetes }})
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry per supported Kubernetes minor (https://kubernetes.io/releases/).
+        include:
+          - kubernetes: "1.37.0"
+            node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+          - kubernetes: "1.36.4"
+            node_image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+          - kubernetes: "1.35.8"
+            node_image: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          version: v0.33.0
+          node_image: ${{ matrix.node_image }}
+          # Match the cluster version (kubectl supports only +/-1 minor skew)
+          kubectl_version: v${{ matrix.kubernetes }}
+
+      - name: Install librenms-mcp (main example; /health does not call LibreNMS)
+        run: |
+          kubectl create namespace mcp
+          kubectl -n mcp create secret generic librenms-mcp-credentials \
+            --from-literal=LIBRENMS_TOKEN=ci-token \
+            --from-literal=MCP_HTTP_BEARER_TOKEN=ci-token
+          # Pinned release, not the example's moving `latest`: chart CI must not
+          # break because of an unreleased librenms-mcp commit.
+          helm install librenms-mcp "$CHART" -n mcp \
+            -f examples/librenms-mcp.yaml \
+            --set image.tag=1.13.0 --set image.pullPolicy=IfNotPresent \
+            --wait --timeout 5m
+
+      - name: Run helm test
+        run: helm test librenms-mcp -n mcp --logs
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl -n mcp get all
+          kubectl -n mcp describe pods
+          kubectl -n mcp logs -l app.kubernetes.io/instance=librenms-mcp --tail=100

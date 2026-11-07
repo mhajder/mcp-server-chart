@@ -1,0 +1,15 @@
+.DS_Store
+.git/
+.gitignore
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+.idea/
+.vscode/
+ci/
+# Source of README.md (helm-docs)
+README.md.gotmpl
+# helm-unittest suites and snapshots (templates/tests/ is the helm test pod and stays)
+tests/*

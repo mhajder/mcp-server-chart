@@ -1,0 +1,36 @@
+# oxidized-mcp
+# Install:
+#   helm upgrade --install oxidized-mcp oci://ghcr.io/mhajder/charts/mcp-server \
+#     -n mcp --create-namespace -f examples/oxidized-mcp.yaml
+#
+# Create the credentials Secret first:
+#   kubectl -n mcp create secret generic oxidized-mcp-credentials \
+#     --from-literal=MCP_HTTP_BEARER_TOKEN='...'
+
+image:
+  repository: ghcr.io/mhajder/oxidized-mcp
+  # "latest" is rebuilt on every push to main (unreleased code).
+  # Pin a release (e.g. "1.2.3") for production.
+  tag: latest
+  # Required with a moving tag, otherwise nodes keep the cached image.
+  pullPolicy: Always
+
+env:
+  OXIDIZED_URL: "http://oxidized.oxidized.svc:8888"
+  OXIDIZED_VERIFY_SSL: "true"
+  OXIDIZED_TIMEOUT: "30"
+  OXIDIZED_SEARCH_TIMEOUT: "300"
+  OXIDIZED_REDACT_NODE_VARS: "true"
+  READ_ONLY_MODE: "true"
+  LOG_LEVEL: "INFO"
+
+existingSecret: oxidized-mcp-credentials
+
+# Expose outside the cluster with Gateway API (or use ingress: instead):
+# httpRoute:
+#   enabled: true
+#   parentRefs:
+#     - name: shared-gateway
+#       namespace: gateway-system
+#   hostnames:
+#     - oxidized-mcp.example.com

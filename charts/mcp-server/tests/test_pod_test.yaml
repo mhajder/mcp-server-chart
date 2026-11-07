@@ -1,0 +1,40 @@
+suite: helm test pod
+templates:
+  - tests/test-health.yaml
+set:
+  image.repository: ghcr.io/mhajder/librenms-mcp
+  image.tag: "1.0.0"
+tests:
+  - it: pins busybox by tag and digest
+    asserts:
+      - matchRegex:
+          path: spec.containers[0].image
+          pattern: "^busybox:1\\.38@sha256:[a-f0-9]{64}$"
+
+  - it: uses a mirror without a digest
+    set:
+      tests.image.repository: registry.local/library/busybox
+      tests.image.digest: ""
+      imagePullSecrets:
+        - name: mirror
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: registry.local/library/busybox:1.38
+      - equal:
+          path: spec.imagePullSecrets
+          value: [{name: mirror}]
+
+  - it: calls the readiness probe path through the Service
+    set:
+      readinessProbe.httpGet.path: /healthz
+      service.port: 9000
+    asserts:
+      - equal:
+          path: spec.containers[0].command[3]
+          value: http://RELEASE-NAME:9000/healthz
+
+  - it: is not selected by the Service
+    asserts:
+      - notExists:
+          path: metadata.labels["app.kubernetes.io/name"]

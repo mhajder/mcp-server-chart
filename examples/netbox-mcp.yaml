@@ -1,0 +1,37 @@
+# netbox-mcp
+# Install:
+#   helm upgrade --install netbox-mcp oci://ghcr.io/mhajder/charts/mcp-server \
+#     -n mcp --create-namespace -f examples/netbox-mcp.yaml
+#
+# Create the credentials Secret first:
+#   kubectl -n mcp create secret generic netbox-mcp-credentials \
+#     --from-literal=NETBOX_TOKEN='...' \
+#     --from-literal=MCP_HTTP_BEARER_TOKEN='...'
+
+image:
+  repository: ghcr.io/mhajder/netbox-mcp
+  # "latest" is rebuilt on every push to main (unreleased code).
+  # Pin a release (e.g. "1.2.3") for production.
+  tag: latest
+  # Required with a moving tag, otherwise nodes keep the cached image.
+  pullPolicy: Always
+
+env:
+  NETBOX_URL: "https://netbox.example.com"
+  NETBOX_VERIFY_SSL: "true"
+  NETBOX_TIMEOUT: "30"
+  NETBOX_BRANCHING_ENABLED: "false"
+  NETBOX_PLUGIN_DISCOVERY: "false"
+  READ_ONLY_MODE: "true"
+  LOG_LEVEL: "INFO"
+
+existingSecret: netbox-mcp-credentials
+
+# Expose outside the cluster with Gateway API (or use ingress: instead):
+# httpRoute:
+#   enabled: true
+#   parentRefs:
+#     - name: shared-gateway
+#       namespace: gateway-system
+#   hostnames:
+#     - netbox-mcp.example.com

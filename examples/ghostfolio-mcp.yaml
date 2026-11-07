@@ -1,0 +1,35 @@
+# ghostfolio-mcp
+# Install:
+#   helm upgrade --install ghostfolio-mcp oci://ghcr.io/mhajder/charts/mcp-server \
+#     -n mcp --create-namespace -f examples/ghostfolio-mcp.yaml
+#
+# Create the credentials Secret first:
+#   kubectl -n mcp create secret generic ghostfolio-mcp-credentials \
+#     --from-literal=GHOSTFOLIO_TOKEN='...' \
+#     --from-literal=MCP_HTTP_BEARER_TOKEN='...'
+
+image:
+  repository: ghcr.io/mhajder/ghostfolio-mcp
+  # "latest" is rebuilt on every push to main (unreleased code).
+  # Pin a release (e.g. "1.2.3") for production.
+  tag: latest
+  # Required with a moving tag, otherwise nodes keep the cached image.
+  pullPolicy: Always
+
+env:
+  GHOSTFOLIO_URL: "https://domain.tld:3333"
+  GHOSTFOLIO_VERIFY_SSL: "true"
+  GHOSTFOLIO_TIMEOUT: "30"
+  READ_ONLY_MODE: "true"
+  LOG_LEVEL: "INFO"
+
+existingSecret: ghostfolio-mcp-credentials
+
+# Expose outside the cluster with Gateway API (or use ingress: instead):
+# httpRoute:
+#   enabled: true
+#   parentRefs:
+#     - name: shared-gateway
+#       namespace: gateway-system
+#   hostnames:
+#     - ghostfolio-mcp.example.com

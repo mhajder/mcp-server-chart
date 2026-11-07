@@ -1,0 +1,35 @@
+# librenms-mcp
+# Install:
+#   helm upgrade --install librenms-mcp oci://ghcr.io/mhajder/charts/mcp-server \
+#     -n mcp --create-namespace -f examples/librenms-mcp.yaml
+#
+# Create the credentials Secret first:
+#   kubectl -n mcp create secret generic librenms-mcp-credentials \
+#     --from-literal=LIBRENMS_TOKEN='...' \
+#     --from-literal=MCP_HTTP_BEARER_TOKEN='...'
+
+image:
+  repository: ghcr.io/mhajder/librenms-mcp
+  # "latest" is rebuilt on every push to main (unreleased code).
+  # Pin a release (e.g. "1.2.3") for production.
+  tag: latest
+  # Required with a moving tag, otherwise nodes keep the cached image.
+  pullPolicy: Always
+
+env:
+  LIBRENMS_URL: "https://librenms.example.com"
+  LIBRENMS_VERIFY_SSL: "true"
+  LIBRENMS_TIMEOUT: "30"
+  READ_ONLY_MODE: "true"
+  LOG_LEVEL: "INFO"
+
+existingSecret: librenms-mcp-credentials
+
+# Expose outside the cluster with Gateway API (or use ingress: instead):
+# httpRoute:
+#   enabled: true
+#   parentRefs:
+#     - name: shared-gateway
+#       namespace: gateway-system
+#   hostnames:
+#     - librenms-mcp.example.com
