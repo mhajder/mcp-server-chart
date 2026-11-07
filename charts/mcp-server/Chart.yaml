@@ -3,7 +3,7 @@ name: mcp-server
 description: Generic Helm chart for HTTP-transport MCP (Model Context Protocol) servers
 type: application
 # Managed by release-please (.release-please-manifest.json); do not edit by hand.
-version: 0.0.0
+version: 1.0.0
 appVersion: "generic"
 # policy/v1 PDB and GA fsGroupChangePolicy.
 kubeVersion: ">=1.23.0-0"
